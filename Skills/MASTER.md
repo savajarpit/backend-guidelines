@@ -3,15 +3,33 @@ name: MASTER
 description: >
   Read this first for ANY task in this project.
   Routes to the correct skill file based on what you're building.
-  This project: NestJS SaaS starter, multi-tenant, PostgreSQL(Prisma) OR MongoDB(Mongoose).
+  This project: NestJS base starter — supports MULTI_TENANT, SINGLE_TENANT, or B2C.
+  PostgreSQL(Prisma) OR MongoDB(Mongoose).
 ---
 
 # MASTER Skill Router
 
-## ALWAYS READ FIRST
-`general-guidelines.md` → applies to every task, every file, every technology.
+## STEP 1 — CHECK PROJECT TYPE FIRST
 
-## THEN READ based on the task
+Before writing any module, controller, or query — confirm which type this project is.
+Check `src/database/database.config.ts` for `PROJECT_TYPE`.
+
+```
+MULTI_TENANT  → tenantId on every query, TenantGuard active, Tenant model exists
+SINGLE_TENANT → no tenantId anywhere, TenantGuard removed
+B2C           → userId scopes data, OwnerGuard instead of TenantGuard
+```
+
+If PROJECT_TYPE is not set yet — ask before writing any code.
+
+---
+
+## STEP 2 — READ general-guidelines.md ALWAYS
+Applies to every task, every file, every technology.
+
+---
+
+## STEP 3 — READ based on the task
 
 | Task involves | Read next |
 |---|---|
@@ -29,18 +47,20 @@ description: >
 | .env, ConfigService, Joi validation, secrets | `environment.md` |
 | Jest, unit tests, e2e tests, mocking | `testing.md` |
 
+---
+
 ## PROJECT QUICK REFERENCE
 
 ```
 Repo:           nestjs-saas-starter
 Framework:      NestJS (latest)
 Language:       TypeScript strict
+Project type:   MULTI_TENANT | SINGLE_TENANT | B2C  ← set this first
 DB switch:      DB_DRIVER in src/database/database.config.ts
 API prefix:     /api
 Versioning:     /api/v1/, /api/v2/ (URI-based)
 Auth:           JWT global — @Public() to opt out
 Response:       { success, message, data, meta, timestamp }
-Tenant:         tenantId on every scoped query — always
 Port:           3000
 Swagger:        http://localhost:3000/api/docs (dev only)
 Health:         GET /api/v1/health
