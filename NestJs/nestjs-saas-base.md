@@ -1,6 +1,350 @@
 # NestJS SaaS Base Project — Complete Reference
-> Senior-architect guide: DB switching, Swagger/OpenAPI, and every best practice from the official NestJS docs.
+> Senior-architect guide: project types, DB switching, Swagger/OpenAPI, and every best practice from the official NestJS docs.
 > This is your reusable template. Keep it. Reference it on every new project.
+
+---
+
+## PART 0 — PROJECT TYPE SELECTION
+
+**First decision on every new project — pick your type before writing any code.**
+Everything else in this file works identically across all three types.
+Only 4 things change: schema, repository queries, JWT payload, and TenantGuard.
+
+---
+
+### DECISION GUIDE — Which type is my project?
+
+```
+Are multiple companies/organizations sharing the same deployment?
+  YES → MULTI_TENANT
+
+Is this serving individual end users (not companies)?
+  YES → B2C
+
+Is this one app for one specific client or internal use?
+  YES → SINGLE_TENANT
+```
+
+---
+
+### TYPE 1 — MULTI_TENANT SaaS
+
+**When to use:** Multiple companies use your app. Each company's data must be
+completely isolated from others. One deployment, many tenants.
+
+**Examples:** CRM software, billing platform, project management tool, HR system.
+
+**Set this flag in `src/database/database.config.ts`:**
+```typescript
+export const PROJECT_TYPE = 'multi_tenant';
+```
+
+**What changes:**
+
+#### Prisma schema — tenantId on every model
+```prisma
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  tenantId  String                          // ← required on every model
+  role      Role     @default(USER)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, role])                 // ← compound indexes
+  @@map("users")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  plan      Plan     @default(FREE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users     User[]
+  @@map("tenants")
+}
+```
+
+#### Mongoose schema — tenantId on every schema
+```typescript
+@Prop({ required: true, index: true })
+tenantId: string;
+
+UserSchema.index({ tenantId: 1, role: 1 });
+```
+
+#### Repository — always scope by tenantId
+```typescript
+// Every query MUST include tenantId
+findAll(tenantId: string, skip: number, take: number) {
+  return this.prisma.$transaction([
+    this.prisma.user.findMany({ where: { tenantId, deletedAt: null }, skip, take }),
+    this.prisma.user.count({ where: { tenantId, deletedAt: null } }),
+  ]);
+}
+```
+
+#### JWT payload — includes tenantId
+```typescript
+export interface JwtPayload {
+  sub: string;       // userId
+  email: string;
+  role: string;
+  tenantId: string;  // ← included
+}
+```
+
+#### app.module.ts — TenantGuard active
+```typescript
+providers: [
+  { provide: APP_GUARD, useClass: JwtAuthGuard },
+  { provide: APP_GUARD, useClass: RolesGuard },
+  { provide: APP_GUARD, useClass: TenantGuard },  // ← active
+],
+```
+
+#### Controller — tenantId from @CurrentUser
+```typescript
+@Get()
+findAll(
+  @Query() pagination: OffsetPaginationDto,
+  @CurrentUser('tenantId') tenantId: string,      // ← always extract
+) {
+  return this.usersService.findAll(pagination, tenantId);
+}
+```
+
+---
+
+### TYPE 2 — SINGLE_TENANT
+
+**When to use:** One app, one client, one company. No data isolation needed
+between organizations. Simple, no overhead.
+
+**Examples:** Internal company tool, admin dashboard for one business,
+client-specific custom app, MVP before going multi-tenant.
+
+**Set this flag:**
+```typescript
+export const PROJECT_TYPE = 'single_tenant';
+```
+
+**What changes:**
+
+#### Prisma schema — no tenantId, no Tenant model
+```prisma
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  role         Role      @default(USER)
+  isActive     Boolean   @default(true)
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // ← no tenantId, no tenant relation, no Tenant model
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+```
+
+#### Repository — no tenant scope
+```typescript
+findAll(skip: number, take: number) {
+  return this.prisma.$transaction([
+    this.prisma.user.findMany({
+      where: { deletedAt: null },    // ← no tenantId filter
+      skip,
+      take,
+      orderBy: { createdAt: 'desc' },
+    }),
+    this.prisma.user.count({ where: { deletedAt: null } }),
+  ]);
+}
+```
+
+#### JWT payload — no tenantId
+```typescript
+export interface JwtPayload {
+  sub: string;
+  email: string;
+  role: string;
+  // ← no tenantId
+}
+```
+
+#### app.module.ts — TenantGuard removed
+```typescript
+providers: [
+  { provide: APP_GUARD, useClass: JwtAuthGuard },
+  { provide: APP_GUARD, useClass: RolesGuard },
+  // ← TenantGuard not registered
+],
+```
+
+#### Controller — no tenantId param
+```typescript
+@Get()
+findAll(@Query() pagination: OffsetPaginationDto) {
+  return this.usersService.findAll(pagination);  // ← no tenantId
+}
+```
+
+---
+
+### TYPE 3 — B2C (Business to Consumer)
+
+**When to use:** Individual users sign up and use the app for themselves.
+No concept of organizations or tenants. Data is scoped by userId.
+
+**Examples:** Social app, marketplace, consumer SaaS (like Notion personal,
+Spotify, fitness tracker), any app where users own their own data.
+
+**Set this flag:**
+```typescript
+export const PROJECT_TYPE = 'b2c';
+```
+
+**What changes:**
+
+#### Prisma schema — userId scopes everything, no Tenant
+```prisma
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  username     String?   @unique
+  role         Role      @default(USER)
+  isActive     Boolean   @default(true)
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  posts        Post[]    // users own their own content
+  @@index([email])
+  @@map("users")
+}
+
+model Post {
+  id        String    @id @default(uuid())
+  userId    String                          // ← userId scopes data
+  title     String
+  content   String?
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id])
+  @@index([userId])                         // ← index userId
+  @@index([userId, createdAt])
+  @@map("posts")
+}
+```
+
+#### Repository — scope by userId instead of tenantId
+```typescript
+findAll(userId: string, skip: number, take: number) {
+  return this.prisma.$transaction([
+    this.prisma.post.findMany({
+      where: { userId, deletedAt: null },   // ← userId not tenantId
+      skip,
+      take,
+    }),
+    this.prisma.post.count({ where: { userId, deletedAt: null } }),
+  ]);
+}
+```
+
+#### JWT payload — no tenantId
+```typescript
+export interface JwtPayload {
+  sub: string;      // userId — this IS the scope
+  email: string;
+  role: string;
+  // ← no tenantId
+}
+```
+
+#### app.module.ts — TenantGuard replaced with OwnerGuard
+```typescript
+providers: [
+  { provide: APP_GUARD, useClass: JwtAuthGuard },
+  { provide: APP_GUARD, useClass: RolesGuard },
+  { provide: APP_GUARD, useClass: OwnerGuard },  // ← users only access their own data
+],
+```
+
+#### OwnerGuard — replaces TenantGuard
+```typescript
+// src/common/guards/owner.guard.ts
+@Injectable()
+export class OwnerGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const req = context.switchToHttp().getRequest();
+    if (!req.user) return true;
+    // Inject userId into request for easy access in services
+    req.userId = req.user.userId;
+    return true;
+  }
+}
+```
+
+#### Controller — userId from @CurrentUser
+```typescript
+@Get()
+findAll(
+  @Query() pagination: OffsetPaginationDto,
+  @CurrentUser('userId') userId: string,      // ← userId not tenantId
+) {
+  return this.postsService.findAll(pagination, userId);
+}
+```
+
+---
+
+### WHAT NEVER CHANGES (all three types)
+
+```
+✅ Folder structure              identical
+✅ Module pattern                identical
+✅ Controller/Service/Repository identical
+✅ Guards system                 identical (only which guards registered differs)
+✅ JWT auth mechanism            identical
+✅ Standard response format      identical
+✅ Pagination system             identical
+✅ Swagger/OpenAPI               identical
+✅ Validation pipes              identical
+✅ Exception filters             identical
+✅ Redis patterns                identical
+✅ Docker setup                  identical
+✅ Queue system                  identical
+✅ Logging                       identical
+✅ Rate limiting                 identical
+✅ DB switching (Prisma/Mongoose) identical
+```
+
+---
+
+### QUICK COMPARISON TABLE
+
+| Concern | Multi-tenant | Single-tenant | B2C |
+|---|---|---|---|
+| Data scope | tenantId | none | userId |
+| Tenant model | ✅ Yes | ❌ No | ❌ No |
+| TenantGuard | ✅ Active | ❌ Remove | ❌ Remove |
+| OwnerGuard | ❌ No | ❌ No | ✅ Active |
+| JWT tenantId | ✅ Yes | ❌ No | ❌ No |
+| Repository filter | `{ tenantId }` | none | `{ userId }` |
+| Compound indexes | `[tenantId, X]` | `[X]` | `[userId, X]` |
+| Cross-data risk | High (isolation critical) | Low | Medium (users own data) |
 
 ---
 
