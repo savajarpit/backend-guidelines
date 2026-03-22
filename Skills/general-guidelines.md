@@ -8,6 +8,27 @@ description: >
 
 # General Guidelines
 
+## PROJECT TYPE — CHECK THIS FIRST
+
+Before writing any module, schema, query, or guard — confirm the project type.
+
+```
+MULTI_TENANT  → tenantId on every tenant-scoped query, TenantGuard active
+SINGLE_TENANT → no tenantId anywhere, TenantGuard removed
+B2C           → userId scopes data instead of tenantId, OwnerGuard active
+```
+
+| Concern | MULTI_TENANT | SINGLE_TENANT | B2C |
+|---|---|---|---|
+| Query scope | `{ tenantId }` | none | `{ userId }` |
+| Active guard | TenantGuard | none | OwnerGuard |
+| JWT payload | sub + email + role + tenantId | sub + email + role | sub + email + role |
+| Tenant model | ✅ exists | ❌ remove | ❌ remove |
+
+If not sure which type — ask before writing code.
+
+---
+
 ## THE THREE LAWS
 1. **Controllers** — HTTP only. Receive → validate DTO → call service → return. Nothing else.
 2. **Services** — Business logic only. No HTTP imports. No direct DB calls. Throws NestJS exceptions.
@@ -56,7 +77,6 @@ DB tables:     snake_case    → @@map("refresh_tokens")
 
 - **Never** use `any` as a type
 - **Never** use `req.body` directly — always DTOs
-- **Never** query without `tenantId` scope on tenant data
 - **Never** return `passwordHash` in responses — use `@Exclude()`
 - **Never** hardcode secrets — always `ConfigService`
 - **Never** `new SomeService()` — always inject via DI
@@ -65,6 +85,8 @@ DB tables:     snake_case    → @@map("refresh_tokens")
 - **Always** early return over nested if/else
 - **Always** explicit return types on service and repository methods
 - **Max** ~200 lines per file, ~30 lines per function — split if larger
+- **MULTI_TENANT only** → never query tenant data without `tenantId` scope
+- **B2C only** → never query user-owned data without `userId` scope
 
 ---
 
@@ -93,6 +115,7 @@ Repositories return `null` — services decide what to throw.
 ## NEW MODULE CHECKLIST
 
 ```
+□ Check PROJECT_TYPE before writing anything
 □ nest g resource modules/[feature] --no-spec
 □ Delete generated entities/ folder
 □ Create [feature].repository.ts
@@ -101,5 +124,7 @@ Repositories return `null` — services decide what to throw.
 □ Add @ApiTags(), @ApiBearerAuth(), @ApiOperation() to controller
 □ Add @ResponseMessage() to each controller method
 □ Add Prisma model OR Mongoose schema
+□ MULTI_TENANT: add tenantId to schema + all queries + controller params
+□ B2C: add userId to schema + all queries + controller params
 □ Run migration (Prisma) or verify indexes (Mongoose)
 ```
